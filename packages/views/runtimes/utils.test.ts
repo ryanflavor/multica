@@ -95,6 +95,32 @@ describe("estimateCost", () => {
     ).toBe(0);
   });
 
+  it("prices Droid BYOK custom model IDs discovered from Factory settings", () => {
+    const rows = [
+      { model: "custom:Claude-Opus-4.7-0", expected: 5 + 25 + 0.5 + 6.25 },
+      { model: "custom:GPT-5.5-1", expected: 5 + 30 + 0.5 + 5 },
+      { model: "custom:GPT-5.3-CODEX-2", expected: 1.75 + 14 + 0.175 + 1.75 },
+      { model: "custom:Kimi-K2.5-3", expected: 0.6 + 3 + 0.1 + 0.6 },
+      { model: "custom:glm-5.1-4", expected: 1.4 + 4.4 + 0.26 },
+      { model: "custom:deepseek-v4-flash-5", expected: 0.14 + 0.28 + 0.0028 + 0.14 },
+      { model: "custom:deepseek-v4-pro-6", expected: 0.435 + 0.87 + 0.003625 + 0.435 },
+    ];
+
+    for (const { model, expected } of rows) {
+      expect(isModelPriced(model)).toBe(true);
+      expect(
+        estimateCost({
+          ...zeroUsage,
+          model,
+          input_tokens: 1_000_000,
+          output_tokens: 1_000_000,
+          cache_read_tokens: 1_000_000,
+          cache_write_tokens: 1_000_000,
+        }),
+      ).toBeCloseTo(expected, 5);
+    }
+  });
+
   it("flags hypothetical future variants as unmapped instead of inheriting a relative's price", () => {
     // No exact match → unmapped. Covers both dotted families (`gpt-5.99-codex`)
     // and unknown sub-variants (`gpt-5-foo`); both must miss rather than
@@ -136,6 +162,7 @@ describe("collectUnmappedModels", () => {
     const rows = [
       { ...zeroUsage, model: "claude-sonnet-4-6" },
       { ...zeroUsage, model: "gpt-5-codex" },
+      { ...zeroUsage, model: "custom:GPT-5.5-1" },
       { ...zeroUsage, model: "fictional-model-x" },
     ];
     expect(collectUnmappedModels(rows)).toEqual(["fictional-model-x"]);
