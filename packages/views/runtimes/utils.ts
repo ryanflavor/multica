@@ -117,8 +117,10 @@ export function formatTokens(n: number): string {
 
 // Pricing per million tokens (USD). Anthropic figures sourced from
 // https://platform.claude.com/docs/en/about-claude/pricing; OpenAI figures
-// from https://openai.com/api/pricing — keep in sync when providers release
-// new models or adjust prices.
+// from https://openai.com/api/pricing; Kimi from https://platform.kimi.ai/;
+// Z.AI from https://docs.z.ai/guides/overview/pricing; DeepSeek from
+// https://api-docs.deepseek.com/quick_start/pricing — keep in sync when
+// providers release new models or adjust prices.
 //
 // Anthropic's cacheWrite reflects the 5-minute cache TTL (1.25× input); the
 // daemon reports cache_creation_input_tokens without TTL metadata, so 5m is
@@ -177,6 +179,36 @@ const MODEL_PRICING: Record<
   // -- OpenAI: GPT-4o family (legacy, kept for runtimes still configured against it) --
   "gpt-4o-mini":        { input: 0.15, output: 0.60, cacheRead: 0.075, cacheWrite: 0.15 },
   "gpt-4o":             { input: 2.50, output: 10,   cacheRead: 1.25,  cacheWrite: 2.50 },
+
+  // -- Kimi / Moonshot --
+  "kimi-k2.5":           { input: 0.60, output: 3.00, cacheRead: 0.10,  cacheWrite: 0.60 },
+
+  // -- Z.AI --
+  // Z.AI currently lists cached-input storage as limited-time free. If the
+  // provider starts billing cache writes separately, update this row rather
+  // than inheriting the normal input price silently.
+  "z-ai/glm-5.1":        { input: 1.40, output: 4.40, cacheRead: 0.26,  cacheWrite: 0 },
+  "glm-5.1":             { input: 1.40, output: 4.40, cacheRead: 0.26,  cacheWrite: 0 },
+
+  // -- DeepSeek V4 --
+  // Prices are the current official API rates. DeepSeek V4 Pro is listed at
+  // a time-limited discount on the provider page, so this row needs review
+  // when that discount changes.
+  "deepseek-v4-flash":   { input: 0.14,  output: 0.28, cacheRead: 0.0028,   cacheWrite: 0.14 },
+  "deepseek-v4-pro":     { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0.435 },
+
+  // -- Droid BYOK custom model IDs discovered from ~/.factory/settings.json on ryan-67 --
+  // Usage rows keep the local Droid custom id, not the underlying provider
+  // model string. Mirror each id to the official provider SKU above so the
+  // dashboard can price recorded BYOK token usage without requiring the user
+  // to add manual custom-pricing overrides.
+  "custom:Claude-Opus-4.7-0":   { input: 5,     output: 25,   cacheRead: 0.50,     cacheWrite: 6.25 },
+  "custom:GPT-5.5-1":           { input: 5,     output: 30,   cacheRead: 0.50,     cacheWrite: 5 },
+  "custom:GPT-5.3-CODEX-2":     { input: 1.75,  output: 14,   cacheRead: 0.175,    cacheWrite: 1.75 },
+  "custom:Kimi-K2.5-3":         { input: 0.60,  output: 3.00, cacheRead: 0.10,     cacheWrite: 0.60 },
+  "custom:glm-5.1-4":           { input: 1.40,  output: 4.40, cacheRead: 0.26,     cacheWrite: 0 },
+  "custom:deepseek-v4-flash-5": { input: 0.14,  output: 0.28, cacheRead: 0.0028,   cacheWrite: 0.14 },
+  "custom:deepseek-v4-pro-6":   { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0.435 },
 };
 
 // Resolve a model string to its pricing tier. Exact match, with one

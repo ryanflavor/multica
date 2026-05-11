@@ -29,6 +29,9 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "Current version: %s (commit: %s, built: %s)\n", version, commit, date)
+	if reason := cli.OfficialUpdateBlockReason(version); reason != "" {
+		return fmt.Errorf("%s", reason)
+	}
 
 	// Check latest version from GitHub.
 	latest, err := cli.FetchLatestRelease()

@@ -46,7 +46,7 @@ type Config struct {
 	CLIVersion                     string                // multica CLI version (e.g. "0.1.13")
 	LaunchedBy                     string                // "desktop" when spawned by the Electron app, empty for standalone
 	Profile                        string                // profile name (empty = default)
-	Agents                         map[string]AgentEntry // keyed by provider: claude, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro
+	Agents                         map[string]AgentEntry // keyed by provider: claude, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, droid
 	WorkspacesRoot                 string                // base path for execution envs (default: ~/multica_workspaces)
 	KeepEnvAfterTask               bool                  // preserve env after task for debugging
 	HealthPort                     int                   // local HTTP port for health checks (default: 19514)
@@ -63,6 +63,7 @@ type Config struct {
 	CodexSemanticInactivityTimeout time.Duration
 	ClaudeArgs                     []string
 	CodexArgs                      []string
+	DroidArgs                      []string
 }
 
 // Overrides allows CLI flags to override environment variables and defaults.
@@ -174,8 +175,15 @@ func LoadConfig(overrides Overrides) (Config, error) {
 			Model: strings.TrimSpace(os.Getenv("MULTICA_KIRO_MODEL")),
 		}
 	}
+	droidPath := envOrDefault("MULTICA_DROID_PATH", "droid")
+	if _, err := exec.LookPath(droidPath); err == nil {
+		agents["droid"] = AgentEntry{
+			Path:  droidPath,
+			Model: strings.TrimSpace(os.Getenv("MULTICA_DROID_MODEL")),
+		}
+	}
 	if len(agents) == 0 {
-		return Config{}, fmt.Errorf("no agent CLI found: install claude, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor-agent, kimi, or kiro-cli and ensure it is on PATH")
+		return Config{}, fmt.Errorf("no agent CLI found: install claude, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor-agent, kimi, kiro-cli, or droid and ensure it is on PATH")
 	}
 
 	claudeArgs, err := shellArgsFromEnv("MULTICA_CLAUDE_ARGS")
@@ -183,6 +191,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		return Config{}, err
 	}
 	codexArgs, err := shellArgsFromEnv("MULTICA_CODEX_ARGS")
+	if err != nil {
+		return Config{}, err
+	}
+	droidArgs, err := shellArgsFromEnv("MULTICA_DROID_ARGS")
 	if err != nil {
 		return Config{}, err
 	}
@@ -344,6 +356,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		CodexSemanticInactivityTimeout: codexSemanticInactivityTimeout,
 		ClaudeArgs:                     claudeArgs,
 		CodexArgs:                      codexArgs,
+		DroidArgs:                      droidArgs,
 	}, nil
 }
 
