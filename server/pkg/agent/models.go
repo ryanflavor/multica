@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -80,6 +81,10 @@ func ListModels(ctx context.Context, providerType, executablePath string) ([]Mod
 	case "kiro":
 		return cachedDiscovery(providerType, func() ([]Model, error) {
 			return discoverKiroModels(ctx, executablePath)
+		})
+	case "droid":
+		return cachedDiscovery(providerType, func() ([]Model, error) {
+			return discoverDroidModels(ctx, executablePath)
 		})
 	case "opencode":
 		return cachedDiscovery(providerType, func() ([]Model, error) {
@@ -185,6 +190,166 @@ func geminiStaticModels() []Model {
 		{ID: "gemini-2.5-pro", Label: "Gemini 2.5 Pro", Provider: "google"},
 		{ID: "gemini-2.5-flash", Label: "Gemini 2.5 Flash", Provider: "google"},
 		{ID: "gemini-2.5-flash-lite", Label: "Gemini 2.5 Flash Lite", Provider: "google"},
+	}
+}
+
+func droidStaticModels() []Model {
+	return []Model{
+		{ID: droidDefaultModelID, Label: "Droid default (configured by local CLI)", Provider: "factory", Default: true},
+		{ID: "claude-opus-4-7", Label: "Claude Opus 4.7", Provider: "anthropic"},
+		{ID: "claude-opus-4-6", Label: "Claude Opus 4.6", Provider: "anthropic"},
+		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic"},
+		{ID: "gpt-5.4", Label: "GPT-5.4", Provider: "openai"},
+		{ID: "gpt-5.4-mini", Label: "GPT-5.4 Mini", Provider: "openai"},
+		{ID: "gpt-5.3-codex", Label: "GPT-5.3 Codex", Provider: "openai"},
+		{ID: "gemini-3.1-pro-preview", Label: "Gemini 3.1 Pro", Provider: "google"},
+		{ID: "gemini-3-flash-preview", Label: "Gemini 3 Flash", Provider: "google"},
+		{ID: "kimi-k2.5", Label: "Droid Core (Kimi K2.5)", Provider: "factory"},
+		{ID: "minimax-m2.7", Label: "Droid Core (MiniMax M2.7)", Provider: "factory"},
+		{ID: "glm-5.1", Label: "Droid Core (GLM-5.1)", Provider: "factory"},
+	}
+}
+
+func discoverDroidModels(ctx context.Context, executablePath string) ([]Model, error) {
+	_ = ctx
+	_ = executablePath
+
+	models := droidStaticModels()
+	if custom, err := loadDroidCustomModelsFromDefaultSettings(); err == nil && len(custom) > 0 {
+		return mergeDroidModels(models, custom), nil
+	}
+	return models, nil
+}
+
+type droidSettingsFile struct {
+	CustomModels []droidCustomModel `json:"customModels"`
+}
+
+type droidCustomModel struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	Model       string `json:"model"`
+}
+
+func loadDroidCustomModelsFromDefaultSettings() ([]Model, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	return loadDroidCustomModelsFromSettings(filepath.Join(home, ".factory", "settings.json"))
+}
+
+func loadDroidCustomModelsFromSettings(path string) ([]Model, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var settings droidSettingsFile
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return nil, err
+	}
+	out := make([]Model, 0, len(settings.CustomModels))
+	for _, custom := range settings.CustomModels {
+		id := strings.TrimSpace(custom.ID)
+		if id == "" {
+			continue
+		}
+		label := strings.TrimSpace(custom.DisplayName)
+		if label == "" {
+			label = strings.TrimSpace(custom.Model)
+		}
+		if label == "" {
+			label = id
+		}
+		out = append(out, Model{
+			ID:       id,
+			Label:    fmt.Sprintf("%s (Droid BYOK)", label),
+			Provider: "droid-byok",
+		})
+	}
+	return out, nil
+}
+
+func mergeDroidModels(base, custom []Model) []Model {
+	out := make([]Model, 0, len(base)+len(custom))
+	seen := make(map[string]bool, len(base)+len(custom))
+	for _, m := range base {
+		if m.ID == "" || seen[m.ID] {
+			continue
+		}
+		out = append(out, m)
+		seen[m.ID] = true
+	}
+	for _, m := range custom {
+		if m.ID == "" || seen[m.ID] {
+			continue
+		}
+		out = append(out, m)
+		seen[m.ID] = true
+	}
+	return out
+}
+
+func parseDroidModels(input string) []Model {
+	out := []Model{{ID: droidDefaultModelID, Label: "Droid default (configured by local CLI)", Provider: "factory", Default: true}}
+	seen := map[string]bool{droidDefaultModelID: true}
+	section := ""
+	scanner := bufio.NewScanner(strings.NewReader(input))
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		switch trimmed {
+		case "Available Models:":
+			section = "available"
+			continue
+		case "Custom Models:":
+			section = "custom"
+			continue
+		case "Model details:", "Authentication:":
+			section = ""
+			continue
+		}
+		if section == "" || trimmed == "" || strings.HasPrefix(trimmed, "-") {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) < 2 {
+			continue
+		}
+		id := fields[0]
+		if seen[id] {
+			continue
+		}
+		label := strings.TrimSpace(strings.TrimPrefix(trimmed, id))
+		label = strings.TrimSpace(strings.ReplaceAll(label, "(default)", ""))
+		if label == "" {
+			label = id
+		}
+		provider := inferDroidProvider(id, section)
+		if section == "custom" {
+			label = fmt.Sprintf("%s (Droid BYOK)", label)
+		}
+		out = append(out, Model{ID: id, Label: label, Provider: provider})
+		seen[id] = true
+	}
+	return out
+}
+
+func inferDroidProvider(id, section string) string {
+	if section == "custom" || strings.HasPrefix(id, "custom:") {
+		return "droid-byok"
+	}
+	switch {
+	case strings.HasPrefix(id, "claude-"):
+		return "anthropic"
+	case strings.HasPrefix(id, "gpt-") || isOpenAIReasoningSeriesID(id):
+		return "openai"
+	case strings.HasPrefix(id, "gemini-"):
+		return "google"
+	case strings.HasPrefix(id, "kimi-"), strings.HasPrefix(id, "glm-"), strings.HasPrefix(id, "minimax-"):
+		return "factory"
+	default:
+		return "factory"
 	}
 }
 

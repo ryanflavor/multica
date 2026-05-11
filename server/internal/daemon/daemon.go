@@ -1373,6 +1373,14 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		})
 		return
 	}
+	if reason := cli.OfficialUpdateBlockReason(d.cfg.CLIVersion); reason != "" {
+		d.logger.Info("refusing CLI self-update: official updater is disabled for this build", "runtime_id", runtimeID, "update_id", update.ID)
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  reason,
+		})
+		return
+	}
 
 	// Prevent concurrent update attempts.
 	if !d.updating.CompareAndSwap(false, true) {
@@ -1933,7 +1941,7 @@ func gcMetaForTask(task Task) (execenv.GCMeta, bool) {
 
 func providerNeedsInlineSystemPrompt(provider string) bool {
 	switch provider {
-	case "openclaw", "hermes", "kiro", "kimi":
+	case "openclaw", "hermes", "kiro", "kimi", "droid":
 		return true
 	default:
 		return false
@@ -2683,6 +2691,8 @@ func defaultArgsForProvider(cfg Config, provider string) []string {
 		args = cfg.ClaudeArgs
 	case "codex":
 		args = cfg.CodexArgs
+	case "droid":
+		args = cfg.DroidArgs
 	default:
 		return nil
 	}

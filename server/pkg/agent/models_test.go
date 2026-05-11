@@ -2,13 +2,15 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestListModelsStaticProviders(t *testing.T) {
 	ctx := context.Background()
-	for _, provider := range []string{"claude", "codex", "gemini", "cursor"} {
+	for _, provider := range []string{"claude", "codex", "droid", "gemini", "cursor"} {
 		got, err := ListModels(ctx, provider, "")
 		if err != nil {
 			t.Fatalf("ListModels(%q) error: %v", provider, err)
@@ -144,14 +146,118 @@ func TestInferCopilotProvider(t *testing.T) {
 		"raptor-mini":       "",
 		// negative cases: must not be misidentified as OpenAI
 		// reasoning series even though they start with `o`.
-		"opus-fake":         "",
-		"omni":              "",
-		"o":                 "",
+		"opus-fake": "",
+		"omni":      "",
+		"o":         "",
 	}
 	for id, want := range cases {
 		if got := inferCopilotProvider(id); got != want {
 			t.Errorf("inferCopilotProvider(%q) = %q, want %q", id, got, want)
 		}
+	}
+}
+
+func TestDroidStaticModelsDefaultUsesLocalCLI(t *testing.T) {
+	t.Parallel()
+	models := droidStaticModels()
+	if len(models) == 0 {
+		t.Fatal("expected droid models")
+	}
+	if models[0].ID != droidDefaultModelID || !models[0].Default {
+		t.Fatalf("expected first droid model to use local CLI default, got %+v", models[0])
+	}
+	for _, m := range models[1:] {
+		if m.Default {
+			t.Fatalf("only %s should be default, got %+v", droidDefaultModelID, m)
+		}
+	}
+}
+
+func TestParseDroidModelsIncludesCustomBYOK(t *testing.T) {
+	t.Parallel()
+	input := `Available Models:
+  claude-opus-4-7              Claude Opus 4.7 (default)
+  gpt-5.4                      GPT-5.4
+
+Custom Models:
+  custom:GPT-5.5-1             GPT-5.5
+  custom:glm-5.1-4             glm-5.1
+
+Model details:
+  - GPT-5.5: supports reasoning: Yes
+`
+	models := parseDroidModels(input)
+	ids := map[string]Model{}
+	for _, m := range models {
+		ids[m.ID] = m
+	}
+	if got := models[0]; got.ID != droidDefaultModelID || !got.Default {
+		t.Fatalf("first entry should be the local droid default sentinel, got %+v", got)
+	}
+	gpt55, ok := ids["custom:GPT-5.5-1"]
+	if !ok {
+		t.Fatalf("expected custom GPT-5.5 BYOK model in: %+v", models)
+	}
+	if gpt55.Provider != "droid-byok" || !strings.Contains(gpt55.Label, "Droid BYOK") {
+		t.Fatalf("custom model should be grouped and labelled as Droid BYOK, got %+v", gpt55)
+	}
+	if builtin := ids["claude-opus-4-7"]; builtin.Provider != "anthropic" || strings.Contains(builtin.Label, "(default)") {
+		t.Fatalf("builtin droid model should be normalized, got %+v", builtin)
+	}
+}
+
+func TestLoadDroidCustomModelsFromSettings(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
+  "customModels": [
+    {
+      "id": "custom:GPT-5.5-1",
+      "displayName": "GPT-5.5",
+      "model": "gpt-5.5",
+      "apiKey": "redacted-test-value"
+    },
+    {
+      "id": "custom:glm-5.1-4",
+      "displayName": "glm-5.1",
+      "model": "z-ai/glm-5.1"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write settings fixture: %v", err)
+	}
+
+	models, err := loadDroidCustomModelsFromSettings(settingsPath)
+	if err != nil {
+		t.Fatalf("loadDroidCustomModelsFromSettings error: %v", err)
+	}
+	ids := map[string]Model{}
+	for _, m := range models {
+		ids[m.ID] = m
+	}
+	gpt55, ok := ids["custom:GPT-5.5-1"]
+	if !ok {
+		t.Fatalf("expected Droid settings custom model in: %+v", models)
+	}
+	if gpt55.Provider != "droid-byok" || !strings.Contains(gpt55.Label, "Droid BYOK") {
+		t.Fatalf("custom model should be grouped and labelled as Droid BYOK, got %+v", gpt55)
+	}
+}
+
+func TestMergeDroidModelsDedupesCustomIDs(t *testing.T) {
+	t.Parallel()
+	models := mergeDroidModels(
+		[]Model{{ID: droidDefaultModelID, Label: "Default", Provider: "factory", Default: true}},
+		[]Model{
+			{ID: "custom:GPT-5.5-1", Label: "GPT-5.5 (Droid BYOK)", Provider: "droid-byok"},
+			{ID: "custom:GPT-5.5-1", Label: "Duplicate", Provider: "droid-byok"},
+		},
+	)
+	if len(models) != 2 {
+		t.Fatalf("expected default + one deduped custom model, got %+v", models)
+	}
+	if models[1].ID != "custom:GPT-5.5-1" || models[1].Label != "GPT-5.5 (Droid BYOK)" {
+		t.Fatalf("unexpected merged models: %+v", models)
 	}
 }
 
@@ -248,6 +354,7 @@ func TestStaticCatalogsHaveAtMostOneDefault(t *testing.T) {
 	catalogs := map[string][]Model{
 		"claude":  claudeStaticModels(),
 		"codex":   codexStaticModels(),
+		"droid":   droidStaticModels(),
 		"gemini":  geminiStaticModels(),
 		"cursor":  cursorStaticModels(),
 		"copilot": copilotStaticModels(),

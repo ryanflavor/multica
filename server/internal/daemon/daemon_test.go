@@ -188,6 +188,7 @@ func TestProviderNeedsInlineSystemPrompt(t *testing.T) {
 		{provider: "hermes", want: true},
 		{provider: "kiro", want: true},
 		{provider: "kimi", want: true},
+		{provider: "droid", want: true},
 		{provider: "codex", want: false},
 		{provider: "claude", want: false},
 	}
@@ -1236,12 +1237,19 @@ func TestShellArgsFromEnvEmptyIsNil(t *testing.T) {
 }
 
 func TestDefaultArgsForProvider(t *testing.T) {
-	cfg := Config{ClaudeArgs: []string{"--max-turns", "60"}, CodexArgs: []string{"--sandbox", "workspace-write"}}
+	cfg := Config{
+		ClaudeArgs: []string{"--max-turns", "60"},
+		CodexArgs:  []string{"--sandbox", "workspace-write"},
+		DroidArgs:  []string{"--auto", "low"},
+	}
 	if got := defaultArgsForProvider(cfg, "claude"); strings.Join(got, " ") != "--max-turns 60" {
 		t.Fatalf("unexpected claude args: %#v", got)
 	}
 	if got := defaultArgsForProvider(cfg, "codex"); strings.Join(got, " ") != "--sandbox workspace-write" {
 		t.Fatalf("unexpected codex args: %#v", got)
+	}
+	if got := defaultArgsForProvider(cfg, "droid"); strings.Join(got, " ") != "--auto low" {
+		t.Fatalf("unexpected droid args: %#v", got)
 	}
 	if got := defaultArgsForProvider(cfg, "gemini"); got != nil {
 		t.Fatalf("expected nil for unsupported provider, got %#v", got)

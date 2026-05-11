@@ -130,3 +130,25 @@ func TestUpdateDownloadTimeoutOrDefault(t *testing.T) {
 		})
 	}
 }
+
+func TestOfficialUpdateBlockReason(t *testing.T) {
+	t.Run("blocks droid fork build", func(t *testing.T) {
+		if got := OfficialUpdateBlockReason("0.2.29-droid-cdc8ae40"); got == "" {
+			t.Fatal("expected fork build update block reason")
+		}
+	})
+
+	t.Run("blocks when env is enabled", func(t *testing.T) {
+		t.Setenv("MULTICA_DISABLE_OFFICIAL_UPDATE", "1")
+		if got := OfficialUpdateBlockReason("0.2.29"); got == "" {
+			t.Fatal("expected env-driven update block reason")
+		}
+	})
+
+	t.Run("allows official version when env is explicitly false", func(t *testing.T) {
+		t.Setenv("MULTICA_DISABLE_OFFICIAL_UPDATE", "false")
+		if got := OfficialUpdateBlockReason("0.2.29"); got != "" {
+			t.Fatalf("unexpected block reason: %q", got)
+		}
+	})
+}

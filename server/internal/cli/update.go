@@ -19,6 +19,8 @@ import (
 
 const DefaultUpdateDownloadTimeout = 120 * time.Second
 
+const forkUpdateDisabledMessage = "official Multica update is disabled for this fork build; rebuild from the fork or publish a fork-owned release before updating"
+
 // GitHubRelease is the subset of the GitHub releases API response we need.
 type GitHubRelease struct {
 	TagName string               `json:"tag_name"`
@@ -183,6 +185,25 @@ func updateDownloadTimeoutOrDefault(timeout time.Duration) time.Duration {
 		return DefaultUpdateDownloadTimeout
 	}
 	return timeout
+}
+
+// OfficialUpdateBlockReason returns a non-empty user-facing reason when the
+// CLI should not replace itself from the official multica-ai/multica releases.
+// Fork builds may carry runtime adapters that are not present in upstream
+// binaries; allowing the generic updater to replace them silently removes those
+// adapters from the running daemon.
+func OfficialUpdateBlockReason(currentVersion string) string {
+	if v := strings.TrimSpace(os.Getenv("MULTICA_DISABLE_OFFICIAL_UPDATE")); v != "" {
+		switch strings.ToLower(v) {
+		case "0", "false", "no", "off":
+		default:
+			return forkUpdateDisabledMessage
+		}
+	}
+	if strings.Contains(strings.ToLower(currentVersion), "droid") {
+		return forkUpdateDisabledMessage
+	}
+	return ""
 }
 
 // UpdateViaDownload downloads the latest release binary from GitHub and replaces
