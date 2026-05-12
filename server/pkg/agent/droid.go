@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,22 +13,11 @@ import (
 	"time"
 )
 
-// droidBackend implements Backend by spawning `droid exec --output-format json`
-// and parsing the one-shot result envelope. Droid does not need a long-lived
-// JSON-RPC transport for the Multica daemon path: the CLI reads the prompt from
-// stdin and returns a single JSON result with session and usage metadata.
+// droidBackend implements Backend by spawning `droid exec --output-format
+// stream-json` and translating Droid's JSONL event stream into Multica task
+// messages. That is what powers the issue-run transcript dialog.
 type droidBackend struct {
 	cfg Config
-}
-
-type droidResultEnvelope struct {
-	Type     string          `json:"type"`
-	Subtype  string          `json:"subtype"`
-	IsError  bool            `json:"is_error"`
-	Duration int64           `json:"duration_ms"`
-	Result   string          `json:"result"`
-	Session  string          `json:"session_id"`
-	Usage    droidUsageBlock `json:"usage"`
 }
 
 type droidUsageBlock struct {
@@ -35,6 +25,25 @@ type droidUsageBlock struct {
 	OutputTokens         int64 `json:"output_tokens"`
 	CacheReadInputTokens int64 `json:"cache_read_input_tokens"`
 	CacheCreationTokens  int64 `json:"cache_creation_input_tokens"`
+	ThinkingTokens       int64 `json:"thinking_tokens"`
+}
+
+type droidStreamEvent struct {
+	Type       string          `json:"type"`
+	Subtype    string          `json:"subtype,omitempty"`
+	Role       string          `json:"role,omitempty"`
+	ID         string          `json:"id,omitempty"`
+	MessageID  string          `json:"messageId,omitempty"`
+	ToolID     string          `json:"toolId,omitempty"`
+	ToolName   string          `json:"toolName,omitempty"`
+	Text       string          `json:"text,omitempty"`
+	Value      json.RawMessage `json:"value,omitempty"`
+	IsError    bool            `json:"isError,omitempty"`
+	FinalText  string          `json:"finalText,omitempty"`
+	SessionID  string          `json:"session_id,omitempty"`
+	Parameters json.RawMessage `json:"parameters,omitempty"`
+	Usage      droidUsageBlock `json:"usage,omitempty"`
+	DurationMs int64           `json:"durationMs,omitempty"`
 }
 
 const droidDefaultModelID = "droid-default"
@@ -102,7 +111,7 @@ func (b *droidBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 	}
 	_ = stdin.Close()
 
-	msgCh := make(chan Message, 4)
+	msgCh := make(chan Message, 256)
 	resCh := make(chan Result, 1)
 	trySend(msgCh, Message{Type: MessageStatus, Status: "running"})
 
@@ -112,13 +121,100 @@ func (b *droidBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		defer close(resCh)
 
 		startTime := time.Now()
-		out, readErr := io.ReadAll(stdout)
+		var output strings.Builder
+		var sessionID string
+		var usage map[string]TokenUsage
+		var streamErr error
+		final := Result{
+			Status: "completed",
+		}
+
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			evt, err := parseDroidStreamEvent([]byte(line))
+			if err != nil {
+				streamErr = err
+				continue
+			}
+			if evt.SessionID != "" {
+				sessionID = evt.SessionID
+			}
+			switch evt.Type {
+			case "system":
+				trySend(msgCh, Message{Type: MessageStatus, Status: "running", SessionID: sessionID})
+			case "message":
+				if evt.Role == "assistant" && evt.Text != "" {
+					output.WriteString(evt.Text)
+					trySend(msgCh, Message{Type: MessageText, Content: evt.Text, SessionID: sessionID})
+				}
+			case "tool_call":
+				input := map[string]any{}
+				if len(evt.Parameters) > 0 {
+					_ = json.Unmarshal(evt.Parameters, &input)
+				}
+				toolName := evt.ToolName
+				if toolName == "" {
+					toolName = evt.ToolID
+				}
+				trySend(msgCh, Message{
+					Type:      MessageToolUse,
+					Tool:      toolName,
+					CallID:    evt.ID,
+					Input:     input,
+					SessionID: sessionID,
+				})
+			case "tool_result":
+				outputText := droidRawValueToString(evt.Value)
+				trySend(msgCh, Message{
+					Type:      MessageToolResult,
+					Tool:      evt.ToolName,
+					CallID:    evt.ID,
+					Output:    outputText,
+					SessionID: sessionID,
+				})
+			case "completion":
+				if evt.FinalText != "" {
+					output.Reset()
+					output.WriteString(evt.FinalText)
+				}
+				if evt.DurationMs > 0 {
+					final.DurationMs = evt.DurationMs
+				}
+				if u := droidUsageToMap(opts.Model, evt.Usage); len(u) > 0 {
+					usage = u
+				}
+			case "error":
+				final.Status = "failed"
+				if evt.Text != "" {
+					final.Error = evt.Text
+				} else if len(evt.Value) > 0 {
+					final.Error = droidRawValueToString(evt.Value)
+				} else {
+					final.Error = "droid emitted error event"
+				}
+				trySend(msgCh, Message{Type: MessageError, Content: final.Error, SessionID: sessionID})
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			streamErr = fmt.Errorf("read droid stream: %w", err)
+		}
 		exitErr := cmd.Wait()
 		duration := time.Since(startTime)
 
-		final := Result{
-			Status:     "completed",
-			DurationMs: duration.Milliseconds(),
+		if final.DurationMs == 0 {
+			final.DurationMs = duration.Milliseconds()
+		}
+		final.SessionID = sessionID
+		if output.Len() > 0 {
+			final.Output = output.String()
+		}
+		if usage != nil {
+			final.Usage = usage
 		}
 
 		switch {
@@ -128,37 +224,13 @@ func (b *droidBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		case runCtx.Err() == context.Canceled:
 			final.Status = "aborted"
 			final.Error = "execution cancelled"
-		case readErr != nil:
-			final.Status = "failed"
-			final.Error = fmt.Sprintf("read droid stdout: %v", readErr)
 		case exitErr != nil:
 			final.Status = "failed"
 			final.Error = fmt.Sprintf("droid exited with error: %v", exitErr)
 		}
-
-		env, parseErr := parseDroidResult(out)
-		if parseErr != nil && final.Status == "completed" {
+		if streamErr != nil && final.Status == "completed" {
 			final.Status = "failed"
-			final.Error = parseErr.Error()
-		}
-		if parseErr == nil {
-			final.Output = env.Result
-			final.SessionID = env.Session
-			final.DurationMs = chooseDroidDuration(env.Duration, final.DurationMs)
-			if env.IsError {
-				final.Status = "failed"
-				if strings.TrimSpace(env.Result) != "" {
-					final.Error = env.Result
-				} else {
-					final.Error = "droid returned is_error=true"
-				}
-			}
-			if usage := droidUsageToMap(opts.Model, env.Usage); len(usage) > 0 {
-				final.Usage = usage
-			}
-			if env.Result != "" {
-				trySend(msgCh, Message{Type: MessageText, Content: env.Result, SessionID: env.Session})
-			}
+			final.Error = streamErr.Error()
 		}
 		if final.Error != "" {
 			final.Error = withAgentStderr(final.Error, "droid", stderrBuf.Tail())
@@ -172,7 +244,7 @@ func (b *droidBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 }
 
 func buildDroidArgs(opts ExecOptions, logger *slog.Logger) []string {
-	args := []string{"exec", "--output-format", "json"}
+	args := []string{"exec", "--output-format", "stream-json"}
 	if opts.Model != "" && opts.Model != droidDefaultModelID {
 		args = append(args, "--model", opts.Model)
 	}
@@ -209,30 +281,32 @@ func droidArgsSetAutonomy(args []string) bool {
 	return false
 }
 
-func parseDroidResult(raw []byte) (droidResultEnvelope, error) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return droidResultEnvelope{}, fmt.Errorf("droid produced empty stdout")
+func parseDroidStreamEvent(raw []byte) (droidStreamEvent, error) {
+	var evt droidStreamEvent
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &evt); err != nil {
+		return droidStreamEvent{}, fmt.Errorf("parse droid stream event: %w", err)
 	}
-	var env droidResultEnvelope
-	if err := json.Unmarshal(trimmed, &env); err != nil {
-		tail := string(trimmed)
-		if len(tail) > 2048 {
-			tail = tail[len(tail)-2048:]
-		}
-		return droidResultEnvelope{}, fmt.Errorf("parse droid JSON result: %w; stdout tail: %s", err, tail)
+	if evt.Type == "" {
+		return droidStreamEvent{}, fmt.Errorf("droid stream event missing type")
 	}
-	if env.Type != "" && env.Type != "result" {
-		return droidResultEnvelope{}, fmt.Errorf("unexpected droid result type %q", env.Type)
-	}
-	return env, nil
+	return evt, nil
 }
 
-func chooseDroidDuration(cliDuration, measured int64) int64 {
-	if cliDuration > 0 {
-		return cliDuration
+func droidRawValueToString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
 	}
-	return measured
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err == nil {
+		if data, err := json.MarshalIndent(v, "", "  "); err == nil {
+			return string(data)
+		}
+	}
+	return string(raw)
 }
 
 func droidUsageToMap(model string, usage droidUsageBlock) map[string]TokenUsage {

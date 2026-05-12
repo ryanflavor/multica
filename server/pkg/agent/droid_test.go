@@ -24,7 +24,9 @@ func TestDroidExecuteParsesJSONResult(t *testing.T) {
 	script := `#!/bin/sh
 printf '%s\n' "$@" > "$DROID_ARGS_FILE"
 cat > "$DROID_STDIN_FILE"
-printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"duration_ms":1234,"num_turns":1,"result":"droid ok","session_id":"sess-1","usage":{"input_tokens":11,"output_tokens":7,"cache_read_input_tokens":3,"cache_creation_input_tokens":5}}'
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"sess-1"}'
+printf '%s\n' '{"type":"message","role":"assistant","text":"droid ok","session_id":"sess-1"}'
+printf '%s\n' '{"type":"completion","finalText":"droid ok","durationMs":1234,"session_id":"sess-1","usage":{"input_tokens":11,"output_tokens":7,"cache_read_input_tokens":3,"cache_creation_input_tokens":5,"thinking_tokens":2}}'
 `
 	writeTestExecutable(t, fakePath, []byte(script))
 
@@ -93,7 +95,7 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"duration_m
 	}
 	args := string(argsBytes)
 	for _, want := range []string{
-		"exec", "--output-format", "json", "--model", "claude-opus-4-7",
+		"exec", "--output-format", "stream-json", "--model", "claude-opus-4-7",
 		"--append-system-prompt", "system hint", "--cwd", dir,
 		"--session-id", "resume-1", "--auto", "high",
 	} {
@@ -130,8 +132,8 @@ func TestBuildDroidArgsDefaultModelOmitsModelFlag(t *testing.T) {
 	if strings.Contains(got, "--model") || strings.Contains(got, droidDefaultModelID) {
 		t.Fatalf("droid default model should use the CLI default without --model: %v", args)
 	}
-	if !strings.Contains(got, "--output-format json") {
-		t.Fatalf("expected JSON output format to remain: %v", args)
+	if !strings.Contains(got, "--output-format stream-json") {
+		t.Fatalf("expected stream JSON output format to remain: %v", args)
 	}
 }
 
@@ -161,7 +163,7 @@ func TestBuildDroidArgsFiltersProtocolCriticalArgs(t *testing.T) {
 	if strings.Contains(got, "text") || strings.Contains(got, "stream-jsonrpc") || strings.Contains(got, "x.md") {
 		t.Fatalf("blocked flag values leaked through: %v", args)
 	}
-	if !strings.Contains(got, "--output-format json") {
+	if !strings.Contains(got, "--output-format stream-json") {
 		t.Fatalf("expected daemon-owned output format to remain: %v", args)
 	}
 	if !strings.Contains(got, "--auto=low") {
@@ -187,13 +189,63 @@ func TestBuildDroidArgsExtraArgsBeforeCustomArgsAndFiltersBoth(t *testing.T) {
 	}
 }
 
-func TestParseDroidResultRejectsNonJSON(t *testing.T) {
+func TestParseDroidStreamEventRejectsNonJSON(t *testing.T) {
 	t.Parallel()
-	_, err := parseDroidResult([]byte("not-json"))
+	_, err := parseDroidStreamEvent([]byte("not-json"))
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
-	if !strings.Contains(err.Error(), "parse droid JSON result") {
+	if !strings.Contains(err.Error(), "parse droid stream event") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDroidExecuteStreamsToolMessages(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	dir := t.TempDir()
+	fakePath := filepath.Join(dir, "droid")
+	script := `#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"sess-tools"}'
+printf '%s\n' '{"type":"tool_call","id":"call-1","toolId":"Execute","toolName":"Execute","parameters":{"command":"pwd"},"session_id":"sess-tools"}'
+printf '%s\n' '{"type":"tool_result","id":"call-1","toolId":"Execute","isError":false,"value":"/tmp/project\n\n[Process exited with code 0]","session_id":"sess-tools"}'
+printf '%s\n' '{"type":"message","role":"assistant","text":"done","session_id":"sess-tools"}'
+printf '%s\n' '{"type":"completion","finalText":"done","durationMs":99,"session_id":"sess-tools","usage":{"input_tokens":1,"output_tokens":2}}'
+`
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend := &droidBackend{cfg: Config{ExecutablePath: fakePath, Logger: slog.Default()}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "run pwd", ExecOptions{Cwd: dir, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	var messages []Message
+	for msg := range session.Messages {
+		if msg.Type == MessageToolUse || msg.Type == MessageToolResult || msg.Type == MessageText {
+			messages = append(messages, msg)
+		}
+	}
+	result := <-session.Result
+	if result.Status != "completed" || result.Output != "done" || result.SessionID != "sess-tools" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("expected streamed messages, got %+v", messages)
+	}
+	if messages[0].Type != MessageToolUse || messages[0].Tool != "Execute" || messages[0].Input["command"] != "pwd" {
+		t.Fatalf("unexpected tool use: %+v", messages[0])
+	}
+	if messages[1].Type != MessageToolResult || !strings.Contains(messages[1].Output, "/tmp/project") {
+		t.Fatalf("unexpected tool result: %+v", messages[1])
+	}
+	if messages[2].Type != MessageText || messages[2].Content != "done" {
+		t.Fatalf("unexpected text message: %+v", messages[2])
 	}
 }
