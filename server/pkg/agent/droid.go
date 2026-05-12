@@ -189,7 +189,7 @@ func buildDroidArgs(opts ExecOptions, logger *slog.Logger) []string {
 	filteredExtra := filterCustomArgs(opts.ExtraArgs, droidBlockedArgs, logger)
 	filteredCustom := filterCustomArgs(opts.CustomArgs, droidBlockedArgs, logger)
 	if !droidArgsSetAutonomy(filteredExtra) && !droidArgsSetAutonomy(filteredCustom) {
-		args = append(args, "--auto", "medium")
+		args = append(args, "--auto", "high")
 	}
 	args = append(args, filteredExtra...)
 	args = append(args, filteredCustom...)

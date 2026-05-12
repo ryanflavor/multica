@@ -95,7 +95,7 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"duration_m
 	for _, want := range []string{
 		"exec", "--output-format", "json", "--model", "claude-opus-4-7",
 		"--append-system-prompt", "system hint", "--cwd", dir,
-		"--session-id", "resume-1", "--auto", "medium",
+		"--session-id", "resume-1", "--auto", "high",
 	} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("expected args to contain %q, got:\n%s", want, args)
@@ -111,7 +111,7 @@ func TestBuildDroidArgsCustomAutonomySuppressesDefault(t *testing.T) {
 	}, slog.Default())
 
 	got := strings.Join(args, " ")
-	if strings.Contains(got, "--auto medium") {
+	if strings.Count(got, "--auto") != 1 {
 		t.Fatalf("default autonomy should be suppressed when custom autonomy is present: %v", args)
 	}
 	if !strings.Contains(got, "--auto high") {
