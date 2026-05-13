@@ -228,7 +228,12 @@ func (b *droidBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			final.Error = "execution cancelled"
 		case exitErr != nil:
 			final.Status = "failed"
-			final.Error = fmt.Sprintf("droid exited with error: %v", exitErr)
+			exitMessage := fmt.Sprintf("droid exited with error: %v", exitErr)
+			if final.Error == "" {
+				final.Error = exitMessage
+			} else {
+				final.Error = fmt.Sprintf("%s (%s)", final.Error, exitMessage)
+			}
 		}
 		if streamErr != nil && final.Status == "completed" {
 			final.Status = "failed"
@@ -262,14 +267,20 @@ func buildDroidArgs(opts ExecOptions, logger *slog.Logger) []string {
 
 	filteredExtra := filterCustomArgs(opts.ExtraArgs, droidBlockedArgs, logger)
 	filteredCustom := filterCustomArgs(opts.CustomArgs, droidBlockedArgs, logger)
+	if droidModelDisablesReasoning(opts.Model) {
+		filteredExtra = filterDroidReasoningArgs(filteredExtra, logger)
+		filteredCustom = filterDroidReasoningArgs(filteredCustom, logger)
+	}
 	if !droidArgsSetAutonomy(filteredExtra) && !droidArgsSetAutonomy(filteredCustom) {
 		args = append(args, "--auto", "high")
 	}
-	defaultReasoning := droidDefaultReasoningEffort(opts.Model)
-	if defaultReasoning != "" &&
-		!droidArgsSetReasoningEffort(filteredExtra) &&
-		!droidArgsSetReasoningEffort(filteredCustom) {
-		args = append(args, "--reasoning-effort", defaultReasoning)
+	if !droidModelDisablesReasoning(opts.Model) {
+		defaultReasoning := droidDefaultReasoningEffort(opts.Model)
+		if defaultReasoning != "" &&
+			!droidArgsSetReasoningEffort(filteredExtra) &&
+			!droidArgsSetReasoningEffort(filteredCustom) {
+			args = append(args, "--reasoning-effort", defaultReasoning)
+		}
 	}
 	args = append(args, filteredExtra...)
 	args = append(args, filteredCustom...)
@@ -300,6 +311,35 @@ func droidArgsSetReasoningEffort(args []string) bool {
 		}
 	}
 	return false
+}
+
+func filterDroidReasoningArgs(args []string, logger *slog.Logger) []string {
+	if len(args) == 0 {
+		return args
+	}
+	filtered := make([]string, 0, len(args))
+	skip := false
+	for _, arg := range args {
+		if skip {
+			skip = false
+			continue
+		}
+		switch {
+		case arg == "--reasoning-effort" || arg == "-r":
+			if logger != nil {
+				logger.Warn("droid: removed unsupported reasoning flag for model", "flag", arg)
+			}
+			skip = true
+			continue
+		case strings.HasPrefix(arg, "--reasoning-effort="):
+			if logger != nil {
+				logger.Warn("droid: removed unsupported reasoning flag for model", "flag", "--reasoning-effort")
+			}
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered
 }
 
 func droidDefaultReasoningEffort(model string) string {

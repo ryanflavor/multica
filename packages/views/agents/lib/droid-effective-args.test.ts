@@ -28,6 +28,18 @@ describe("Droid effective args", () => {
     ).toEqual(["--auto", "high", "--reasoning-effort", "high"]);
   });
 
+  it("does not expose or pass reasoning flags for DeepSeek BYOK models", () => {
+    expect(getDroidReasoningSpec("droid", "custom:deepseek-v4-pro-6")).toBeNull();
+    expect(
+      buildDroidEffectiveArgsPreview("droid", "custom:deepseek-v4-pro-6", [
+        "--reasoning-effort",
+        "max",
+        "--foo",
+        "bar",
+      ]),
+    ).toEqual(["--auto", "high", "--foo", "bar"]);
+  });
+
   it("recognizes Droid hyphenated Claude model ids", () => {
     const spec = getDroidReasoningSpec("droid", "claude-opus-4-7");
     expect(spec?.levels).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);

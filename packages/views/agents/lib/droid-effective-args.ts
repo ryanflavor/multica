@@ -18,6 +18,7 @@ export function getDroidReasoningSpec(
   discoveredSpec?: DroidReasoningSpec,
 ): DroidReasoningSpec | null {
   if (provider !== "droid") return null;
+  if (droidModelDisablesReasoning(model)) return null;
   if (isValidReasoningSpec(discoveredSpec)) return discoveredSpec;
   return inferDroidReasoningSpec(model);
 }
@@ -29,13 +30,18 @@ export function buildDroidEffectiveArgsPreview(
   discoveredSpec?: DroidReasoningSpec | null,
 ): string[] {
   if (provider !== "droid") return args;
+  const effectiveArgs = droidModelDisablesReasoning(model)
+    ? stripDroidReasoningArgs(args)
+    : args;
   const out: string[] = [];
-  if (!droidArgsSetAutonomy(args)) out.push("--auto", "high");
-  const spec = discoveredSpec ?? getDroidReasoningSpec(provider, model);
-  if (spec && !droidArgsSetReasoningEffort(args)) {
+  if (!droidArgsSetAutonomy(effectiveArgs)) out.push("--auto", "high");
+  const spec = droidModelDisablesReasoning(model)
+    ? null
+    : (discoveredSpec ?? getDroidReasoningSpec(provider, model));
+  if (spec && !droidArgsSetReasoningEffort(effectiveArgs)) {
     out.push(spec.flag, spec.defaultLevel);
   }
-  out.push(...args);
+  out.push(...effectiveArgs);
   return out;
 }
 
@@ -80,6 +86,26 @@ function droidArgsSetAutonomy(args: string[]): boolean {
 
 function droidArgsSetReasoningEffort(args: string[]): boolean {
   return getDroidReasoningEffort(args) !== null;
+}
+
+function stripDroidReasoningArgs(args: string[]): string[] {
+  const next: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+    if (arg === "--reasoning-effort" || arg === "-r") {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--reasoning-effort=")) {
+      continue;
+    }
+    next.push(arg);
+  }
+  return next;
+}
+
+function droidModelDisablesReasoning(model: string | undefined): boolean {
+  return Boolean(model?.toLowerCase().includes("deepseek"));
 }
 
 function inferDroidReasoningSpec(model: string | undefined): DroidReasoningSpec | null {
@@ -138,14 +164,6 @@ function inferDroidReasoningSpec(model: string | undefined): DroidReasoningSpec 
       levels: ["low", "medium", "high"],
       defaultLevel: "high",
       label: "Gemini",
-    };
-  }
-  if (normalized.startsWith("custom:")) {
-    return {
-      flag: "--reasoning-effort",
-      levels: ["off", "low", "medium", "high", "xhigh", "max"],
-      defaultLevel: "high",
-      label: "Droid BYOK",
     };
   }
   return null;

@@ -253,6 +253,7 @@ type droidCustomModel struct {
 	DisplayName     string `json:"displayName"`
 	Model           string `json:"model"`
 	Provider        string `json:"provider"`
+	BaseURL         string `json:"baseUrl"`
 	ReasoningEffort string `json:"reasoningEffort"`
 }
 
@@ -297,6 +298,9 @@ func loadDroidCustomModelsFromSettings(path string) ([]Model, error) {
 }
 
 func droidReasoningSpecForCustomModel(custom droidCustomModel) *ReasoningSpec {
+	if droidCustomModelLooksDeepSeek(custom) {
+		return nil
+	}
 	return droidReasoningSpecForModel(custom.Model, custom.Provider, custom.ReasoningEffort)
 }
 
@@ -304,6 +308,9 @@ func droidReasoningSpecForModel(model, provider, defaultOverride string) *Reason
 	model = strings.ToLower(strings.TrimSpace(model))
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	defaultOverride = strings.ToLower(strings.TrimSpace(defaultOverride))
+	if droidModelStringLooksDeepSeek(model) {
+		return nil
+	}
 
 	var levels []string
 	defaultLevel := ""
@@ -354,7 +361,7 @@ func droidReasoningSpecForModel(model, provider, defaultOverride string) *Reason
 		levels = []string{"low", "medium", "high"}
 		defaultLevel = "high"
 		label = "MiniMax"
-	case provider == "generic-chat-completion-api":
+	case provider == "generic-chat-completion-api" && defaultOverride != "":
 		levels = []string{"off", "low", "medium", "high", "xhigh", "max"}
 		defaultLevel = "high"
 		label = "Droid BYOK"
@@ -379,6 +386,33 @@ func droidModelStringLooksGPT55(model string) bool {
 	return model == "gpt-5.5" ||
 		strings.Contains(model, "gpt-5.5") ||
 		strings.Contains(model, "gpt_5_5")
+}
+
+func droidModelDisablesReasoning(modelID string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(modelID))
+	if normalized == "" || normalized == droidDefaultModelID {
+		return false
+	}
+	if droidModelStringLooksDeepSeek(normalized) {
+		return true
+	}
+	if strings.HasPrefix(normalized, "custom:") {
+		if custom, ok := droidCustomModelSettings(modelID); ok {
+			return droidCustomModelLooksDeepSeek(custom)
+		}
+	}
+	return false
+}
+
+func droidCustomModelLooksDeepSeek(custom droidCustomModel) bool {
+	return droidModelStringLooksDeepSeek(custom.ID) ||
+		droidModelStringLooksDeepSeek(custom.DisplayName) ||
+		droidModelStringLooksDeepSeek(custom.Model) ||
+		droidModelStringLooksDeepSeek(custom.BaseURL)
+}
+
+func droidModelStringLooksDeepSeek(model string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(model)), "deepseek")
 }
 
 func containsString(items []string, value string) bool {

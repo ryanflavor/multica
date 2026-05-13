@@ -225,6 +225,19 @@ func TestLoadDroidCustomModelsFromSettings(t *testing.T) {
       "model": "z-ai/glm-5.1",
       "provider": "generic-chat-completion-api",
       "reasoningEffort": "max"
+    },
+    {
+      "id": "custom:deepseek-v4-pro-6",
+      "displayName": "deepseek-v4-pro",
+      "model": "deepseek-v4-pro",
+      "provider": "generic-chat-completion-api",
+      "reasoningEffort": "max"
+    },
+    {
+      "id": "custom:opaque-generic",
+      "displayName": "Opaque Generic",
+      "model": "vendor/opaque",
+      "provider": "generic-chat-completion-api"
     }
   ]
 }`), 0o600); err != nil {
@@ -255,6 +268,12 @@ func TestLoadDroidCustomModelsFromSettings(t *testing.T) {
 	glm := ids["custom:glm-5.1-4"]
 	if glm.Reasoning == nil || glm.Reasoning.DefaultLevel != "max" {
 		t.Fatalf("generic BYOK model should expose settings-backed reasoning default, got %+v", glm.Reasoning)
+	}
+	if deepseek := ids["custom:deepseek-v4-pro-6"]; deepseek.Reasoning != nil {
+		t.Fatalf("DeepSeek BYOK should not expose Droid reasoning controls, got %+v", deepseek.Reasoning)
+	}
+	if opaque := ids["custom:opaque-generic"]; opaque.Reasoning != nil {
+		t.Fatalf("generic BYOK without an explicit setting should not expose guessed reasoning controls, got %+v", opaque.Reasoning)
 	}
 }
 

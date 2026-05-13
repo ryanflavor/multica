@@ -121,6 +121,45 @@ func TestBuildDroidArgsCustomAutonomySuppressesDefault(t *testing.T) {
 	}
 }
 
+func TestDroidExecutePreservesStreamErrorOnNonZeroExit(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	dir := t.TempDir()
+	fakePath := filepath.Join(dir, "droid")
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"sess-error"}'
+printf '%s\n' '{"type":"error","text":"BYOK Error: reasoning_content must be passed back","session_id":"sess-error"}'
+exit 1
+`
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend := &droidBackend{
+		cfg: Config{ExecutablePath: fakePath, Logger: slog.Default()},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "hello droid", ExecOptions{Cwd: dir, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	for range session.Messages {
+	}
+	result := <-session.Result
+	if result.Status != "failed" {
+		t.Fatalf("expected failed, got status=%q error=%q", result.Status, result.Error)
+	}
+	if !strings.Contains(result.Error, "BYOK Error: reasoning_content") {
+		t.Fatalf("stream error should not be overwritten by exit status: %q", result.Error)
+	}
+	if !strings.Contains(result.Error, "droid exited with error") {
+		t.Fatalf("exit status should still be retained: %q", result.Error)
+	}
+}
+
 func TestBuildDroidArgsDefaultModelOmitsModelFlag(t *testing.T) {
 	t.Parallel()
 	args := buildDroidArgs(ExecOptions{
@@ -229,6 +268,42 @@ func TestBuildDroidArgsUsesSettingsReasoningForOtherBYOKModels(t *testing.T) {
 	got := strings.Join(args, " ")
 	if !strings.Contains(got, "--reasoning-effort max") {
 		t.Fatalf("expected non-GPT BYOK custom model to inherit settings reasoning: %v", args)
+	}
+}
+
+func TestBuildDroidArgsDisablesReasoningForDeepSeekBYOK(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsDir := filepath.Join(home, ".factory")
+	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
+		t.Fatalf("mkdir settings dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{
+  "customModels": [
+    {
+      "id": "custom:deepseek-v4-pro-6",
+      "displayName": "deepseek-v4-pro",
+      "model": "deepseek-v4-pro",
+      "provider": "generic-chat-completion-api",
+      "reasoningEffort": "max"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	args := buildDroidArgs(ExecOptions{
+		Model:      "custom:deepseek-v4-pro-6",
+		ExtraArgs:  []string{"--reasoning-effort=high"},
+		CustomArgs: []string{"--reasoning-effort", "max", "--auto", "high"},
+	}, slog.Default())
+
+	got := strings.Join(args, " ")
+	if strings.Contains(got, "--reasoning-effort") {
+		t.Fatalf("DeepSeek BYOK must not receive reasoning flags: %v", args)
+	}
+	if !strings.Contains(got, "--model custom:deepseek-v4-pro-6") || !strings.Contains(got, "--auto high") {
+		t.Fatalf("expected model and autonomy to remain after stripping reasoning: %v", args)
 	}
 }
 
