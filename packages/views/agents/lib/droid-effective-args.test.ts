@@ -8,6 +8,13 @@ import {
 
 describe("Droid effective args", () => {
   it("defaults Droid GPT-5.5 BYOK to high autonomy and low reasoning", () => {
+    expect(getDroidReasoningSpec("droid", "custom:GPT-5.5-1")?.levels).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
     expect(
       buildDroidEffectiveArgsPreview("droid", "custom:GPT-5.5-1", []),
     ).toEqual(["--auto", "high", "--reasoning-effort", "low"]);

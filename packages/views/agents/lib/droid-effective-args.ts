@@ -7,7 +7,7 @@ export interface DroidReasoningSpec {
 
 const DROID_GPT55_REASONING: DroidReasoningSpec = {
   flag: "--reasoning-effort",
-  levels: ["low", "medium", "high", "xhigh"],
+  levels: ["off", "low", "medium", "high", "xhigh"],
   defaultLevel: "low",
   label: "GPT-5.5 / OpenAI BYOK",
 };

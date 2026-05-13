@@ -249,9 +249,46 @@ func TestLoadDroidCustomModelsFromSettings(t *testing.T) {
 	if gpt55.Reasoning == nil || gpt55.Reasoning.DefaultLevel != "low" {
 		t.Fatalf("custom GPT-5.5 should expose Multica low reasoning default, got %+v", gpt55.Reasoning)
 	}
+	if !containsString(gpt55.Reasoning.Levels, "off") {
+		t.Fatalf("custom GPT-5.5 should expose Droid off reasoning level, got %+v", gpt55.Reasoning)
+	}
 	glm := ids["custom:glm-5.1-4"]
 	if glm.Reasoning == nil || glm.Reasoning.DefaultLevel != "max" {
 		t.Fatalf("generic BYOK model should expose settings-backed reasoning default, got %+v", glm.Reasoning)
+	}
+}
+
+func TestParseDroidModelsAttachesReasoningDetailsFromCLIHelp(t *testing.T) {
+	t.Parallel()
+	input := `Available Models:
+  claude-opus-4-7              Claude Opus 4.7 (default)
+  gpt-5.2                      GPT-5.2
+  minimax-m2.7                 Droid Core (MiniMax M2.7)
+
+Custom Models:
+  custom:GPT-5.5-1             GPT-5.5
+
+Model details:
+  - Claude Opus 4.7: supports reasoning: Yes; supported: [off, low, medium, high, xhigh, max]; default: high
+  - GPT-5.2: supports reasoning: Yes; supported: [off, low, medium, high, xhigh]; default: low
+  - Droid Core (MiniMax M2.7): supports reasoning: Yes; supported: [high]; default: high
+`
+	models := parseDroidModels(input)
+	ids := map[string]Model{}
+	for _, m := range models {
+		ids[m.ID] = m
+	}
+	gpt52 := ids["gpt-5.2"]
+	if gpt52.Reasoning == nil || gpt52.Reasoning.DefaultLevel != "low" || !containsString(gpt52.Reasoning.Levels, "off") {
+		t.Fatalf("expected GPT-5.2 reasoning details from CLI help, got %+v", gpt52.Reasoning)
+	}
+	claude := ids["claude-opus-4-7"]
+	if claude.Reasoning == nil || claude.Reasoning.DefaultLevel != "high" || !containsString(claude.Reasoning.Levels, "max") {
+		t.Fatalf("expected Claude reasoning details from CLI help, got %+v", claude.Reasoning)
+	}
+	custom := ids["custom:GPT-5.5-1"]
+	if custom.Reasoning != nil {
+		t.Fatalf("custom listing should wait for settings-backed reasoning metadata, got %+v", custom.Reasoning)
 	}
 }
 

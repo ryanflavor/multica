@@ -223,10 +223,21 @@ func droidStaticModels() []Model {
 }
 
 func discoverDroidModels(ctx context.Context, executablePath string) ([]Model, error) {
-	_ = ctx
-	_ = executablePath
-
 	models := droidStaticModels()
+	if executablePath == "" {
+		executablePath = "droid"
+	}
+	if _, err := exec.LookPath(executablePath); err == nil {
+		runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(runCtx, executablePath, "exec", "--help")
+		hideAgentWindow(cmd)
+		if out, err := cmd.Output(); err == nil {
+			if discovered := parseDroidModels(string(out)); len(discovered) > 1 {
+				models = discovered
+			}
+		}
+	}
 	if custom, err := loadDroidCustomModelsFromDefaultSettings(); err == nil && len(custom) > 0 {
 		return mergeDroidModels(models, custom), nil
 	}
@@ -300,7 +311,7 @@ func droidReasoningSpecForModel(model, provider, defaultOverride string) *Reason
 
 	switch {
 	case droidModelStringLooksGPT55(model):
-		levels = []string{"low", "medium", "high", "xhigh"}
+		levels = []string{"off", "low", "medium", "high", "xhigh"}
 		defaultLevel = "low"
 		label = "GPT-5.5 / OpenAI BYOK"
 	case strings.Contains(model, "gpt-5.4-mini"):
@@ -381,20 +392,32 @@ func containsString(items []string, value string) bool {
 
 func mergeDroidModels(base, custom []Model) []Model {
 	out := make([]Model, 0, len(base)+len(custom))
-	seen := make(map[string]bool, len(base)+len(custom))
+	seen := make(map[string]int, len(base)+len(custom))
 	for _, m := range base {
-		if m.ID == "" || seen[m.ID] {
+		if m.ID == "" {
+			continue
+		}
+		if _, ok := seen[m.ID]; ok {
 			continue
 		}
 		out = append(out, m)
-		seen[m.ID] = true
+		seen[m.ID] = len(out) - 1
 	}
 	for _, m := range custom {
-		if m.ID == "" || seen[m.ID] {
+		if m.ID == "" {
+			continue
+		}
+		if index, ok := seen[m.ID]; ok {
+			// Custom settings know the underlying BYOK provider/model and can carry
+			// a user-selected reasoning effort. Prefer that richer metadata over
+			// the CLI's plain "Custom Models" listing for the same ID.
+			if m.Provider == "droid-byok" && m.Reasoning != nil {
+				out[index] = m
+			}
 			continue
 		}
 		out = append(out, m)
-		seen[m.ID] = true
+		seen[m.ID] = len(out) - 1
 	}
 	return out
 }
@@ -402,6 +425,7 @@ func mergeDroidModels(base, custom []Model) []Model {
 func parseDroidModels(input string) []Model {
 	out := []Model{{ID: droidDefaultModelID, Label: "Droid default (configured by local CLI)", Provider: "factory", Default: true}}
 	seen := map[string]bool{droidDefaultModelID: true}
+	details := map[string]*ReasoningSpec{}
 	section := ""
 	scanner := bufio.NewScanner(strings.NewReader(input))
 	for scanner.Scan() {
@@ -414,8 +438,18 @@ func parseDroidModels(input string) []Model {
 		case "Custom Models:":
 			section = "custom"
 			continue
-		case "Model details:", "Authentication:":
+		case "Model details:":
+			section = "details"
+			continue
+		case "Authentication:":
 			section = ""
+			continue
+		}
+		if section == "details" {
+			label, spec, ok := parseDroidModelDetailLine(trimmed)
+			if ok {
+				details[normalizeDroidModelLabel(label)] = spec
+			}
 			continue
 		}
 		if section == "" || trimmed == "" || strings.HasPrefix(trimmed, "-") {
@@ -441,7 +475,94 @@ func parseDroidModels(input string) []Model {
 		out = append(out, Model{ID: id, Label: label, Provider: provider})
 		seen[id] = true
 	}
+	for i := range out {
+		if spec, ok := details[normalizeDroidModelLabel(out[i].Label)]; ok {
+			out[i].Reasoning = spec
+		}
+	}
 	return out
+}
+
+func parseDroidModelDetailLine(line string) (string, *ReasoningSpec, bool) {
+	if !strings.HasPrefix(line, "- ") {
+		return "", nil, false
+	}
+	body := strings.TrimSpace(strings.TrimPrefix(line, "- "))
+	label, rest, ok := strings.Cut(body, ":")
+	if !ok {
+		return "", nil, false
+	}
+	label = strings.TrimSpace(label)
+	if !strings.Contains(rest, "supports reasoning: Yes") {
+		return "", nil, false
+	}
+	supported, ok := substringBetween(rest, "supported: [", "]")
+	if !ok {
+		return "", nil, false
+	}
+	levels := splitCommaList(supported)
+	if len(levels) == 0 || (len(levels) == 1 && levels[0] == "none") {
+		return "", nil, false
+	}
+	defaultLevel := strings.TrimSpace(rest)
+	if _, after, ok := strings.Cut(rest, "default:"); ok {
+		defaultLevel = strings.TrimSpace(after)
+		if end := strings.Index(defaultLevel, ";"); end >= 0 {
+			defaultLevel = strings.TrimSpace(defaultLevel[:end])
+		}
+	}
+	if defaultLevel == "" || defaultLevel == "none" || !containsString(levels, defaultLevel) {
+		return "", nil, false
+	}
+	return label, &ReasoningSpec{
+		Flag:         "--reasoning-effort",
+		Levels:       levels,
+		DefaultLevel: defaultLevel,
+		Label:        droidReasoningLabelFromModelLabel(label),
+	}, true
+}
+
+func substringBetween(s, start, end string) (string, bool) {
+	_, after, ok := strings.Cut(s, start)
+	if !ok {
+		return "", false
+	}
+	value, _, ok := strings.Cut(after, end)
+	return value, ok
+}
+
+func splitCommaList(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		item := strings.ToLower(strings.TrimSpace(part))
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func normalizeDroidModelLabel(label string) string {
+	label = strings.ReplaceAll(label, "(default)", "")
+	label = strings.ReplaceAll(label, "[Deprecated]", "")
+	return strings.Join(strings.Fields(strings.ToLower(label)), " ")
+}
+
+func droidReasoningLabelFromModelLabel(label string) string {
+	lower := strings.ToLower(label)
+	switch {
+	case strings.Contains(lower, "claude"):
+		return "Claude"
+	case strings.Contains(lower, "gpt"):
+		return "OpenAI GPT"
+	case strings.Contains(lower, "gemini"):
+		return "Gemini"
+	case strings.Contains(lower, "minimax"):
+		return "MiniMax"
+	default:
+		return "Droid"
+	}
 }
 
 func inferDroidProvider(id, section string) string {
