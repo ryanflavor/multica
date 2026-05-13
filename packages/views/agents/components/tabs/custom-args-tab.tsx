@@ -1,13 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2, Plus, Save, Trash2 } from "lucide-react";
 import type { Agent, RuntimeDevice } from "@multica/core/types";
+import { runtimeModelsOptions } from "@multica/core/runtimes";
 import { createSafeId } from "@multica/core/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@multica/ui/components/ui/native-select";
 import { toast } from "sonner";
 import { useT } from "../../../i18n";
+import {
+  buildDroidEffectiveArgsPreview,
+  getDroidReasoningEffort,
+  getDroidReasoningSpec,
+  setDroidReasoningEffort,
+} from "../../lib/droid-effective-args";
 
 interface ArgEntry {
   id: string;
@@ -47,6 +59,27 @@ export function CustomArgsTab({
   const currentArgs = entriesToArgs(entries);
   const originalArgs = agent.custom_args ?? [];
   const dirty = JSON.stringify(currentArgs) !== JSON.stringify(originalArgs);
+  const modelsQuery = useQuery(
+    runtimeModelsOptions(
+      runtimeDevice?.status === "online" ? runtimeDevice.id : null,
+    ),
+  );
+  const discoveredModel = modelsQuery.data?.models.find(
+    (model) => model.id === agent.model,
+  );
+  const reasoningSpec = getDroidReasoningSpec(
+    runtimeDevice?.provider,
+    agent.model,
+    discoveredModel?.reasoning,
+  );
+  const reasoningEffort =
+    getDroidReasoningEffort(currentArgs) ?? reasoningSpec?.defaultLevel ?? "";
+  const effectiveArgs = buildDroidEffectiveArgsPreview(
+    runtimeDevice?.provider,
+    agent.model,
+    currentArgs,
+    reasoningSpec,
+  );
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -64,6 +97,10 @@ export function CustomArgsTab({
     setEntries(
       entries.map((entry, i) => (i === index ? { ...entry, value } : entry)),
     );
+  };
+
+  const updateReasoningEffort = (value: string) => {
+    setEntries(argsToEntries(setDroidReasoningEffort(currentArgs, value)));
   };
 
   const handleSave = async () => {
@@ -95,6 +132,14 @@ export function CustomArgsTab({
               </code>
             </p>
           )}
+          {launchHeader && effectiveArgs.length > 0 && (
+            <p className="max-w-full break-all text-xs text-muted-foreground">
+              {t(($) => $.tab_body.custom_args.effective_args_prefix)}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                {launchHeader} {effectiveArgs.join(" ")}
+              </code>
+            </p>
+          )}
         </div>
         <Button
           type="button"
@@ -107,6 +152,34 @@ export function CustomArgsTab({
           {t(($) => $.tab_body.common.add)}
         </Button>
       </div>
+
+      {reasoningSpec && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 px-3 py-2.5">
+          <div className="min-w-0 space-y-0.5">
+            <div className="text-xs font-medium">
+              {t(($) => $.tab_body.custom_args.reasoning_effort_label)}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {t(($) => $.tab_body.custom_args.reasoning_effort_hint, {
+                model: reasoningSpec.label,
+              })}
+            </div>
+          </div>
+          <NativeSelect
+            size="sm"
+            value={reasoningEffort}
+            onChange={(e) => updateReasoningEffort(e.target.value)}
+            aria-label={t(($) => $.tab_body.custom_args.reasoning_effort_label)}
+            className="shrink-0"
+          >
+            {reasoningSpec.levels.map((level) => (
+              <NativeSelectOption key={level} value={level}>
+                {level}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </div>
+      )}
 
       {entries.length > 0 && (
         <div className="space-y-2">

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -263,6 +265,12 @@ func buildDroidArgs(opts ExecOptions, logger *slog.Logger) []string {
 	if !droidArgsSetAutonomy(filteredExtra) && !droidArgsSetAutonomy(filteredCustom) {
 		args = append(args, "--auto", "high")
 	}
+	defaultReasoning := droidDefaultReasoningEffort(opts.Model)
+	if defaultReasoning != "" &&
+		!droidArgsSetReasoningEffort(filteredExtra) &&
+		!droidArgsSetReasoningEffort(filteredCustom) {
+		args = append(args, "--reasoning-effort", defaultReasoning)
+	}
 	args = append(args, filteredExtra...)
 	args = append(args, filteredCustom...)
 	return args
@@ -279,6 +287,61 @@ func droidArgsSetAutonomy(args []string) bool {
 		}
 	}
 	return false
+}
+
+func droidArgsSetReasoningEffort(args []string) bool {
+	for _, arg := range args {
+		switch arg {
+		case "--reasoning-effort", "-r":
+			return true
+		}
+		if strings.HasPrefix(arg, "--reasoning-effort=") {
+			return true
+		}
+	}
+	return false
+}
+
+func droidDefaultReasoningEffort(model string) string {
+	if spec := droidReasoningSpecForDroidModel(model); spec != nil {
+		return spec.DefaultLevel
+	}
+	return ""
+}
+
+func droidReasoningSpecForDroidModel(model string) *ReasoningSpec {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if normalized == "" || normalized == droidDefaultModelID {
+		return nil
+	}
+	if strings.HasPrefix(normalized, "custom:") {
+		if custom, ok := droidCustomModelSettings(model); ok {
+			return droidReasoningSpecForCustomModel(custom)
+		}
+		return droidReasoningSpecForModel(model, "generic-chat-completion-api", "")
+	}
+	return droidReasoningSpecForModel(model, inferDroidProvider(model, ""), "")
+}
+
+func droidCustomModelSettings(modelID string) (droidCustomModel, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return droidCustomModel{}, false
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".factory", "settings.json"))
+	if err != nil {
+		return droidCustomModel{}, false
+	}
+	var settings droidSettingsFile
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return droidCustomModel{}, false
+	}
+	for _, custom := range settings.CustomModels {
+		if strings.EqualFold(strings.TrimSpace(custom.ID), strings.TrimSpace(modelID)) {
+			return custom, true
+		}
+	}
+	return droidCustomModel{}, false
 }
 
 func parseDroidStreamEvent(raw []byte) (droidStreamEvent, error) {

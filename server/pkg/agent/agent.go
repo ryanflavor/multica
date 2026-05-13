@@ -154,7 +154,7 @@ var launchHeaders = map[string]string{
 	"pi":       "pi (json mode)",
 	"kimi":     "kimi acp",
 	"kiro":     "kiro-cli acp",
-	"droid":    "droid exec (json)",
+	"droid":    "droid exec (stream-json)",
 }
 
 // LaunchHeader returns the user-visible launch skeleton for agentType, or an

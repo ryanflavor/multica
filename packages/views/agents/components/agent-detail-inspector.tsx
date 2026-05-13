@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Camera, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import type {
@@ -18,9 +19,14 @@ import {
   type AgentPresenceDetail,
 } from "@multica/core/agents";
 import { api } from "@multica/core/api";
+import { runtimeModelsOptions } from "@multica/core/runtimes";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { isImeComposing, timeAgo } from "@multica/core/utils";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@multica/ui/components/ui/native-select";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { Input } from "@multica/ui/components/ui/input";
 import {
@@ -44,6 +50,11 @@ import { ModelPicker } from "./inspector/model-picker";
 import { RuntimePicker } from "./inspector/runtime-picker";
 import { SkillAttach } from "./inspector/skill-attach";
 import { VisibilityPicker } from "./inspector/visibility-picker";
+import {
+  getDroidReasoningEffort,
+  getDroidReasoningSpec,
+  setDroidReasoningEffort,
+} from "../lib/droid-effective-args";
 
 interface InspectorProps {
   agent: Agent;
@@ -93,6 +104,21 @@ export function AgentDetailInspector({
   const { t } = useT("agents");
   const update = (data: Record<string, unknown>) => onUpdate(agent.id, data);
   const isOnline = runtime?.status === "online";
+  const modelsQuery = useQuery(
+    runtimeModelsOptions(isOnline ? agent.runtime_id : null),
+  );
+  const discoveredModel = modelsQuery.data?.models.find(
+    (model) => model.id === agent.model,
+  );
+  const reasoningSpec = getDroidReasoningSpec(
+    runtime?.provider,
+    agent.model,
+    discoveredModel?.reasoning,
+  );
+  const reasoningEffort =
+    getDroidReasoningEffort(agent.custom_args ?? []) ??
+    reasoningSpec?.defaultLevel ??
+    "";
 
   return (
     <aside className="flex w-full flex-col rounded-lg border bg-background md:h-full md:min-h-0 md:overflow-y-auto">
@@ -130,6 +156,36 @@ export function AgentDetailInspector({
             onChange={(m) => update({ model: m })}
           />
         </PropRow>
+        {reasoningSpec && (
+          <PropRow label={t(($) => $.inspector.prop_thinking)} interactive={false}>
+            {canEdit ? (
+              <NativeSelect
+                size="sm"
+                value={reasoningEffort}
+                onChange={(e) =>
+                  update({
+                    custom_args: setDroidReasoningEffort(
+                      agent.custom_args ?? [],
+                      e.target.value,
+                    ),
+                  })
+                }
+                aria-label={t(($) => $.inspector.prop_thinking)}
+                className="h-7 w-auto min-w-24"
+              >
+                {reasoningSpec.levels.map((level) => (
+                  <NativeSelectOption key={level} value={level}>
+                    {level}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            ) : (
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {reasoningEffort}
+              </span>
+            )}
+          </PropRow>
+        )}
         <PropRow label={t(($) => $.inspector.prop_visibility)} interactive={false}>
           <VisibilityPicker
             value={agent.visibility}

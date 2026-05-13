@@ -312,6 +312,12 @@ export interface RuntimeModel {
   label: string;
   provider?: string;
   default?: boolean;
+  reasoning?: {
+    flag: "--reasoning-effort";
+    levels: string[];
+    defaultLevel: string;
+    label: string;
+  };
 }
 
 export type RuntimeModelListStatus =

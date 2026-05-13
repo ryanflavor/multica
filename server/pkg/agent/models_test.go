@@ -215,12 +215,16 @@ func TestLoadDroidCustomModelsFromSettings(t *testing.T) {
       "id": "custom:GPT-5.5-1",
       "displayName": "GPT-5.5",
       "model": "gpt-5.5",
+      "provider": "openai",
+      "reasoningEffort": "xhigh",
       "apiKey": "redacted-test-value"
     },
     {
       "id": "custom:glm-5.1-4",
       "displayName": "glm-5.1",
-      "model": "z-ai/glm-5.1"
+      "model": "z-ai/glm-5.1",
+      "provider": "generic-chat-completion-api",
+      "reasoningEffort": "max"
     }
   ]
 }`), 0o600); err != nil {
@@ -241,6 +245,13 @@ func TestLoadDroidCustomModelsFromSettings(t *testing.T) {
 	}
 	if gpt55.Provider != "droid-byok" || !strings.Contains(gpt55.Label, "Droid BYOK") {
 		t.Fatalf("custom model should be grouped and labelled as Droid BYOK, got %+v", gpt55)
+	}
+	if gpt55.Reasoning == nil || gpt55.Reasoning.DefaultLevel != "low" {
+		t.Fatalf("custom GPT-5.5 should expose Multica low reasoning default, got %+v", gpt55.Reasoning)
+	}
+	glm := ids["custom:glm-5.1-4"]
+	if glm.Reasoning == nil || glm.Reasoning.DefaultLevel != "max" {
+		t.Fatalf("generic BYOK model should expose settings-backed reasoning default, got %+v", glm.Reasoning)
 	}
 }
 

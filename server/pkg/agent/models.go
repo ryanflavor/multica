@@ -30,6 +30,18 @@ type Model struct {
 	Label    string `json:"label"`
 	Provider string `json:"provider,omitempty"`
 	Default  bool   `json:"default,omitempty"`
+	// Reasoning describes the provider-specific CLI flag and accepted levels
+	// for models where the runtime supports an explicit thinking/reasoning
+	// control. It is intentionally metadata only; execution still applies the
+	// same defaults in the backend so UI and daemon behavior stay aligned.
+	Reasoning *ReasoningSpec `json:"reasoning,omitempty"`
+}
+
+type ReasoningSpec struct {
+	Flag         string   `json:"flag"`
+	Levels       []string `json:"levels"`
+	DefaultLevel string   `json:"defaultLevel"`
+	Label        string   `json:"label"`
 }
 
 // modelCache memoizes dynamic discovery calls so repeated UI loads
@@ -196,16 +208,16 @@ func geminiStaticModels() []Model {
 func droidStaticModels() []Model {
 	return []Model{
 		{ID: droidDefaultModelID, Label: "Droid default (configured by local CLI)", Provider: "factory", Default: true},
-		{ID: "claude-opus-4-7", Label: "Claude Opus 4.7", Provider: "anthropic"},
-		{ID: "claude-opus-4-6", Label: "Claude Opus 4.6", Provider: "anthropic"},
-		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic"},
-		{ID: "gpt-5.4", Label: "GPT-5.4", Provider: "openai"},
-		{ID: "gpt-5.4-mini", Label: "GPT-5.4 Mini", Provider: "openai"},
-		{ID: "gpt-5.3-codex", Label: "GPT-5.3 Codex", Provider: "openai"},
-		{ID: "gemini-3.1-pro-preview", Label: "Gemini 3.1 Pro", Provider: "google"},
-		{ID: "gemini-3-flash-preview", Label: "Gemini 3 Flash", Provider: "google"},
+		{ID: "claude-opus-4-7", Label: "Claude Opus 4.7", Provider: "anthropic", Reasoning: droidReasoningSpecForModel("claude-opus-4-7", "anthropic", "")},
+		{ID: "claude-opus-4-6", Label: "Claude Opus 4.6", Provider: "anthropic", Reasoning: droidReasoningSpecForModel("claude-opus-4-6", "anthropic", "")},
+		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic", Reasoning: droidReasoningSpecForModel("claude-sonnet-4-6", "anthropic", "")},
+		{ID: "gpt-5.4", Label: "GPT-5.4", Provider: "openai", Reasoning: droidReasoningSpecForModel("gpt-5.4", "openai", "")},
+		{ID: "gpt-5.4-mini", Label: "GPT-5.4 Mini", Provider: "openai", Reasoning: droidReasoningSpecForModel("gpt-5.4-mini", "openai", "")},
+		{ID: "gpt-5.3-codex", Label: "GPT-5.3 Codex", Provider: "openai", Reasoning: droidReasoningSpecForModel("gpt-5.3-codex", "openai", "")},
+		{ID: "gemini-3.1-pro-preview", Label: "Gemini 3.1 Pro", Provider: "google", Reasoning: droidReasoningSpecForModel("gemini-3.1-pro-preview", "google", "")},
+		{ID: "gemini-3-flash-preview", Label: "Gemini 3 Flash", Provider: "google", Reasoning: droidReasoningSpecForModel("gemini-3-flash-preview", "google", "")},
 		{ID: "kimi-k2.5", Label: "Droid Core (Kimi K2.5)", Provider: "factory"},
-		{ID: "minimax-m2.7", Label: "Droid Core (MiniMax M2.7)", Provider: "factory"},
+		{ID: "minimax-m2.7", Label: "Droid Core (MiniMax M2.7)", Provider: "factory", Reasoning: droidReasoningSpecForModel("minimax-m2.7", "factory", "")},
 		{ID: "glm-5.1", Label: "Droid Core (GLM-5.1)", Provider: "factory"},
 	}
 }
@@ -226,9 +238,11 @@ type droidSettingsFile struct {
 }
 
 type droidCustomModel struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName"`
-	Model       string `json:"model"`
+	ID              string `json:"id"`
+	DisplayName     string `json:"displayName"`
+	Model           string `json:"model"`
+	Provider        string `json:"provider"`
+	ReasoningEffort string `json:"reasoningEffort"`
 }
 
 func loadDroidCustomModelsFromDefaultSettings() ([]Model, error) {
@@ -262,12 +276,107 @@ func loadDroidCustomModelsFromSettings(path string) ([]Model, error) {
 			label = id
 		}
 		out = append(out, Model{
-			ID:       id,
-			Label:    fmt.Sprintf("%s (Droid BYOK)", label),
-			Provider: "droid-byok",
+			ID:        id,
+			Label:     fmt.Sprintf("%s (Droid BYOK)", label),
+			Provider:  "droid-byok",
+			Reasoning: droidReasoningSpecForCustomModel(custom),
 		})
 	}
 	return out, nil
+}
+
+func droidReasoningSpecForCustomModel(custom droidCustomModel) *ReasoningSpec {
+	return droidReasoningSpecForModel(custom.Model, custom.Provider, custom.ReasoningEffort)
+}
+
+func droidReasoningSpecForModel(model, provider, defaultOverride string) *ReasoningSpec {
+	model = strings.ToLower(strings.TrimSpace(model))
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	defaultOverride = strings.ToLower(strings.TrimSpace(defaultOverride))
+
+	var levels []string
+	defaultLevel := ""
+	label := ""
+
+	switch {
+	case droidModelStringLooksGPT55(model):
+		levels = []string{"low", "medium", "high", "xhigh"}
+		defaultLevel = "low"
+		label = "GPT-5.5 / OpenAI BYOK"
+	case strings.Contains(model, "gpt-5.4-mini"):
+		levels = []string{"low", "medium", "high", "xhigh"}
+		defaultLevel = "high"
+		label = "OpenAI GPT"
+	case strings.Contains(model, "gpt-5.2") && !strings.Contains(model, "codex"):
+		levels = []string{"off", "low", "medium", "high", "xhigh"}
+		defaultLevel = "low"
+		label = "OpenAI GPT"
+	case strings.Contains(model, "gpt-") || strings.Contains(model, "codex") || provider == "openai":
+		levels = []string{"low", "medium", "high", "xhigh"}
+		defaultLevel = "medium"
+		label = "OpenAI GPT"
+	case strings.Contains(model, "claude-opus-4-7"):
+		levels = []string{"off", "low", "medium", "high", "xhigh", "max"}
+		defaultLevel = "high"
+		label = "Claude"
+	case strings.Contains(model, "claude-opus-4-6") || strings.Contains(model, "claude-sonnet-4-6"):
+		levels = []string{"off", "low", "medium", "high", "max"}
+		defaultLevel = "high"
+		label = "Claude"
+	case strings.Contains(model, "claude-") || provider == "anthropic":
+		levels = []string{"off", "low", "medium", "high"}
+		defaultLevel = "off"
+		label = "Claude"
+	case strings.Contains(model, "gemini-3-flash"):
+		levels = []string{"minimal", "low", "medium", "high"}
+		defaultLevel = "high"
+		label = "Gemini"
+	case strings.Contains(model, "gemini-") || provider == "google":
+		levels = []string{"low", "medium", "high"}
+		defaultLevel = "high"
+		label = "Gemini"
+	case strings.Contains(model, "minimax-m2.7"):
+		levels = []string{"high"}
+		defaultLevel = "high"
+		label = "MiniMax"
+	case strings.Contains(model, "minimax-m2.5"):
+		levels = []string{"low", "medium", "high"}
+		defaultLevel = "high"
+		label = "MiniMax"
+	case provider == "generic-chat-completion-api":
+		levels = []string{"off", "low", "medium", "high", "xhigh", "max"}
+		defaultLevel = "high"
+		label = "Droid BYOK"
+	default:
+		return nil
+	}
+
+	// GPT-5.5 is a Multica policy override: keep it low by default even if the
+	// user's Droid settings currently store a higher value.
+	if !droidModelStringLooksGPT55(model) && containsString(levels, defaultOverride) {
+		defaultLevel = defaultOverride
+	}
+	return &ReasoningSpec{
+		Flag:         "--reasoning-effort",
+		Levels:       levels,
+		DefaultLevel: defaultLevel,
+		Label:        label,
+	}
+}
+
+func droidModelStringLooksGPT55(model string) bool {
+	return model == "gpt-5.5" ||
+		strings.Contains(model, "gpt-5.5") ||
+		strings.Contains(model, "gpt_5_5")
+}
+
+func containsString(items []string, value string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeDroidModels(base, custom []Model) []Model {

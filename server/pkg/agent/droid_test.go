@@ -148,8 +148,87 @@ func TestBuildDroidArgsCustomBYOKModelPassesModelFlag(t *testing.T) {
 	if !strings.Contains(got, "--model custom:GPT-5.5-1") {
 		t.Fatalf("custom droid BYOK model must be passed through to the droid CLI: %v", args)
 	}
+	if !strings.Contains(got, "--auto high") || !strings.Contains(got, "--reasoning-effort low") {
+		t.Fatalf("custom GPT-5.5 BYOK should default to high autonomy and low reasoning: %v", args)
+	}
 	if strings.Contains(got, "api") || strings.Contains(got, "key") {
 		t.Fatalf("model selection args must not contain BYOK secret material: %v", args)
+	}
+}
+
+func TestBuildDroidArgsCustomReasoningSuppressesGPT55Default(t *testing.T) {
+	t.Parallel()
+	args := buildDroidArgs(ExecOptions{
+		Model:      "custom:GPT-5.5-1",
+		CustomArgs: []string{"--reasoning-effort", "xhigh"},
+	}, slog.Default())
+
+	got := strings.Join(args, " ")
+	if strings.Count(got, "--reasoning-effort") != 1 {
+		t.Fatalf("expected one reasoning flag, got: %v", args)
+	}
+	if !strings.Contains(got, "--reasoning-effort xhigh") {
+		t.Fatalf("expected custom reasoning to pass through: %v", args)
+	}
+}
+
+func TestBuildDroidArgsDetectsGPT55FromSettingsModelID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsDir := filepath.Join(home, ".factory")
+	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
+		t.Fatalf("mkdir settings dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{
+  "customModels": [
+    {
+      "id": "custom:primary-openai-model",
+      "displayName": "Primary OpenAI",
+      "model": "gpt-5.5"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	args := buildDroidArgs(ExecOptions{
+		Model: "custom:primary-openai-model",
+	}, slog.Default())
+
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "--reasoning-effort low") {
+		t.Fatalf("expected settings-backed GPT-5.5 custom model to use low reasoning: %v", args)
+	}
+}
+
+func TestBuildDroidArgsUsesSettingsReasoningForOtherBYOKModels(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsDir := filepath.Join(home, ".factory")
+	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
+		t.Fatalf("mkdir settings dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{
+  "customModels": [
+    {
+      "id": "custom:local-kimi",
+      "displayName": "Kimi K2.5",
+      "model": "kimi-k2.5",
+      "provider": "generic-chat-completion-api",
+      "reasoningEffort": "max"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	args := buildDroidArgs(ExecOptions{
+		Model: "custom:local-kimi",
+	}, slog.Default())
+
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "--reasoning-effort max") {
+		t.Fatalf("expected non-GPT BYOK custom model to inherit settings reasoning: %v", args)
 	}
 }
 
